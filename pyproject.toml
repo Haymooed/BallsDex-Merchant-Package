@@ -1,6 +1,6 @@
 [project]
 name = "Merchant"
-version = "1.0.0"
+version = "0.1.3"
 
 description = "A merchant that has new balls everyday!"
 license = "MIT"  # replace with your own license
