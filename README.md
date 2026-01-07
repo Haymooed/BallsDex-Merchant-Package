@@ -8,7 +8,7 @@ Add this entry to `config/extra.toml` so BallsDex installs the package automatic
 
 ```toml
 [[ballsdex.packages]]
-location = "git+https://github.com/Haymooed/MarketDex-PackagesV3.git"
+location = "git+https://github.com/Haymooed/BallsDex-Merchant-Package.git"
 path = "merchant"
 enabled = true
 editable = false
