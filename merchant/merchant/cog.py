@@ -14,13 +14,7 @@ from django.utils import timezone
 
 from bd_models.models import BallInstance, Player
 from settings.models import settings
-
-# ✅ IMPORTANT:
-# BallsDex v3 expects imports from the PACKAGE ROOT, not parent-relative paths
-from merchant.models.item import MerchantItem
-from merchant.models.purchase import MerchantPurchase
-from merchant.models.rotation import MerchantRotation, MerchantRotationItem
-from merchant.models.settings import MerchantSettings
+from merchant.models import MerchantItem, MerchantPurchase, MerchantRotation, MerchantRotationItem, MerchantSettings
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
