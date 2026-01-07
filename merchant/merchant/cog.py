@@ -4,7 +4,7 @@ import asyncio
 import logging
 import random
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional
 
 import discord
 from discord import app_commands
@@ -15,11 +15,17 @@ from django.utils import timezone
 from bd_models.models import BallInstance, Player
 from settings.models import settings
 
-from .models import MerchantItem, MerchantPurchase, MerchantRotation, MerchantRotationItem, MerchantSettings
+# Use a parent-relative import so the cog (in merchant/merchant) finds the app models
+from ..models import (
+    MerchantItem,
+    MerchantPurchase,
+    MerchantRotation,
+    MerchantRotationItem,
+    MerchantSettings,
+)
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
-
 
 log = logging.getLogger(__name__)
 Interaction = discord.Interaction["BallsDexBot"]
@@ -35,18 +41,18 @@ class Merchant(commands.GroupCog, name="merchant"):
         self._rotation_lock = asyncio.Lock()
         self._rotation_refresher.start()
 
-    async def cog_unload(self):
+    async def cog_unload(self) -> None:
         self._rotation_refresher.cancel()
 
     @tasks.loop(minutes=5)
-    async def _rotation_refresher(self):
+    async def _rotation_refresher(self) -> None:
         await self.ensure_rotation()
 
     @_rotation_refresher.before_loop
-    async def _wait_ready(self):
+    async def _wait_ready(self) -> None:
         await self.bot.wait_until_ready()
 
-    async def ensure_rotation(self) -> MerchantRotation | None:
+    async def ensure_rotation(self) -> Optional[MerchantRotation]:
         """
         Ensure a current rotation exists (unless disabled).
         """
@@ -62,13 +68,13 @@ class Merchant(commands.GroupCog, name="merchant"):
 
             return await self._create_rotation(config)
 
-    async def _active_rotation(self) -> MerchantRotation | None:
+    async def _active_rotation(self) -> Optional[MerchantRotation]:
         qs = MerchantRotation.objects.filter(ends_at__gt=timezone.now()).order_by("-starts_at")
         async for rotation in qs[:1]:
             return rotation
         return None
 
-    async def _create_rotation(self, config: MerchantSettings) -> MerchantRotation | None:
+    async def _create_rotation(self, config: MerchantSettings) -> Optional[MerchantRotation]:
         items_qs = (
             MerchantItem.objects.filter(enabled=True)
             .select_related("ball", "special")
@@ -82,7 +88,9 @@ class Merchant(commands.GroupCog, name="merchant"):
         count = min(config.items_per_rotation, len(items))
         selection = self._weighted_sample(items, count)
         now = timezone.now()
-        rotation = await MerchantRotation.objects.acreate(starts_at=now, ends_at=now + config.rotation_delta)
+        rotation = await MerchantRotation.objects.acreate(
+            starts_at=now, ends_at=now + config.rotation_delta
+        )
         await MerchantRotationItem.objects.abulk_create(
             [
                 MerchantRotationItem(rotation=rotation, item=item, price_snapshot=item.price)
@@ -94,9 +102,9 @@ class Merchant(commands.GroupCog, name="merchant"):
         return rotation
 
     @staticmethod
-    def _weighted_sample(items: list[MerchantItem], k: int) -> list[MerchantItem]:
+    def _weighted_sample(items: List[MerchantItem], k: int) -> List[MerchantItem]:
         pool = list(items)
-        selected: list[MerchantItem] = []
+        selected: List[MerchantItem] = []
         while pool and len(selected) < k:
             weights = [max(1, item.weight) for item in pool]
             choice = random.choices(pool, weights=weights, k=1)[0]
@@ -104,7 +112,7 @@ class Merchant(commands.GroupCog, name="merchant"):
             pool.remove(choice)
         return selected
 
-    async def _get_rotation_items(self, rotation: MerchantRotation) -> list[MerchantRotationItem]:
+    async def _get_rotation_items(self, rotation: MerchantRotation) -> List[MerchantRotationItem]:
         qs = rotation.rotation_items.select_related("item__ball", "item__special")
         return [entry async for entry in qs]
 
@@ -130,15 +138,13 @@ class Merchant(commands.GroupCog, name="merchant"):
         lines = []
         for entry in entries:
             special = f" ({entry.item.special})" if entry.item.special else ""
-            lines.append(
-                f"`{entry.id}` — {entry.item.label}{special} • {entry.price_snapshot} {currency}"
-            )
+            lines.append(f"`{entry.id}` — {entry.item.label}{special} • {entry.price_snapshot} {currency}")
         embed.add_field(name="Current offers", value="\n".join(lines), inline=False)
         embed.set_footer(text="Use /merchant buy <id> to purchase.")
         return embed
 
     @app_commands.command(name="view", description="View the current merchant rotation.")
-    async def view(self, interaction: Interaction):
+    async def view(self, interaction: Interaction) -> None:
         rotation = await self.ensure_rotation()
         if rotation is None:
             await interaction.response.send_message(
@@ -150,7 +156,7 @@ class Merchant(commands.GroupCog, name="merchant"):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="buy", description="Buy an item from the merchant.")
-    async def buy(self, interaction: Interaction, item_id: int):
+    async def buy(self, interaction: Interaction, item_id: int) -> None:
         config = await MerchantSettings.load()
         if not config.enabled:
             await interaction.response.send_message("The merchant is disabled.", ephemeral=True)
@@ -164,7 +170,9 @@ class Merchant(commands.GroupCog, name="merchant"):
         entries = await self._get_rotation_items(rotation)
         entry = next((x for x in entries if x.id == item_id), None)
         if entry is None:
-            await interaction.response.send_message("Unknown offer id. Check /merchant view for valid ids.", ephemeral=True)
+            await interaction.response.send_message(
+                "Unknown offer id. Check /merchant view for valid ids.", ephemeral=True
+            )
             return
 
         player, _ = await Player.objects.aget_or_create(discord_id=interaction.user.id)
