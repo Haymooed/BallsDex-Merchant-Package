@@ -15,6 +15,7 @@ from django.utils import timezone
 from bd_models.models import BallInstance, Player
 from settings.models import settings
 
+# Corrected relative import for your folder structure
 from ..models import MerchantItem, MerchantPurchase, MerchantRotation, MerchantRotationItem, MerchantSettings
 
 if TYPE_CHECKING:
@@ -23,9 +24,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 Interaction = discord.Interaction["BallsDexBot"]
 
-
 class Merchant(commands.GroupCog, name="merchant"):
-    """Traveling merchant system (BallsDex v3 compatible)."""
+    """Traveling merchant system for BallsDex."""
 
     def __init__(self, bot: "BallsDexBot"):
         self.bot = bot
@@ -35,9 +35,10 @@ class Merchant(commands.GroupCog, name="merchant"):
     async def cog_unload(self) -> None:
         self._rotation_refresher.cancel()
 
-    # ========================
-    # Rotation handling
-    # ========================
+    # --- Internal Utilities ---
+
+    def _get_currency_name(self) -> str:
+        return settings.currency_name or "coins"
 
     @tasks.loop(minutes=5)
     async def _rotation_refresher(self) -> None:
@@ -48,6 +49,7 @@ class Merchant(commands.GroupCog, name="merchant"):
         await self.bot.wait_until_ready()
 
     async def ensure_rotation(self) -> Optional[MerchantRotation]:
+        """Ensures a rotation exists if enabled, creating one if expired."""
         async with self._rotation_lock:
             config = await MerchantSettings.load()
             if not config.enabled:
@@ -55,287 +57,181 @@ class Merchant(commands.GroupCog, name="merchant"):
 
             now = timezone.now()
             rotation = await self._get_active_rotation()
+            
             if rotation and rotation.ends_at > now:
                 return rotation
 
-            return await self._create_rotation(config)
+            return await self._create_new_rotation(config)
 
     async def _get_active_rotation(self) -> Optional[MerchantRotation]:
-        qs = MerchantRotation.objects.filter(
+        """Fetch the most recent rotation that hasn't ended."""
+        return await MerchantRotation.objects.filter(
             ends_at__gt=timezone.now()
-        ).order_by("-starts_at")
+        ).order_by("-starts_at").afirst()
 
-        async for rotation in qs[:1]:
-            return rotation
-        return None
+    async def _create_new_rotation(self, config: MerchantSettings) -> Optional[MerchantRotation]:
+        """Generates a new set of items and saves the rotation."""
+        qs = MerchantItem.objects.filter(enabled=True).select_related("ball", "special")
+        available_items = [item async for item in qs]
 
-    async def _create_rotation(
-        self, config: MerchantSettings
-    ) -> Optional[MerchantRotation]:
-        qs = (
-            MerchantItem.objects.filter(enabled=True)
-            .select_related("ball", "special")
-            .order_by("id")
-        )
-        items = [item async for item in qs]
-        if not items:
-            log.warning("Merchant rotation skipped: no enabled items.")
+        if not available_items:
+            log.warning("Merchant: No enabled items found in database. Skipping rotation.")
             return None
 
-        count = min(config.items_per_rotation, len(items))
-        selection = self._weighted_sample(items, count)
+        # Determine how many items to pick
+        k = min(config.items_per_rotation, len(available_items))
+        
+        # Weighted random selection without replacement
+        selected_items = []
+        pool = list(available_items)
+        for _ in range(k):
+            weights = [max(1, i.weight) for i in pool]
+            choice = random.choices(pool, weights=weights, k=1)[0]
+            selected_items.append(choice)
+            pool.remove(choice)
 
         now = timezone.now()
-        rotation = await MerchantRotation.objects.acreate(
+        new_rotation = await MerchantRotation.objects.acreate(
             starts_at=now,
-            ends_at=now + config.rotation_delta,
+            ends_at=now + timedelta(minutes=config.rotation_minutes)
         )
 
-        await MerchantRotationItem.objects.abulk_create(
-            [
-                MerchantRotationItem(
-                    rotation=rotation,
-                    item=item,
-                    price_snapshot=item.price,
-                )
-                for item in selection
-            ]
-        )
+        await MerchantRotationItem.objects.abulk_create([
+            MerchantRotationItem(
+                rotation=new_rotation,
+                item=item,
+                price_snapshot=item.price
+            ) for item in selected_items
+        ])
 
-        await MerchantSettings.objects.filter(pk=config.pk).aupdate(
-            last_rotation_at=now
-        )
+        await MerchantSettings.objects.filter(pk=config.pk).aupdate(last_rotation_at=now)
+        log.info(f"Merchant: Created new rotation with {len(selected_items)} items.")
+        return new_rotation
 
-        log.info("Merchant rotation created (%s items).", len(selection))
-        return rotation
-
-    @staticmethod
-    def _weighted_sample(
-        items: List[MerchantItem], k: int
-    ) -> List[MerchantItem]:
-        pool = list(items)
-        chosen: List[MerchantItem] = []
-
-        while pool and len(chosen) < k:
-            weights = [max(1, i.weight) for i in pool]
-            pick = random.choices(pool, weights=weights, k=1)[0]
-            chosen.append(pick)
-            pool.remove(pick)
-
-        return chosen
-
-    async def _rotation_items(
-        self, rotation: MerchantRotation
-    ) -> List[MerchantRotationItem]:
-        qs = rotation.rotation_items.select_related(
-            "item__ball",
-            "item__special",
-        )
+    async def _get_rotation_entries(self, rotation: MerchantRotation) -> List[MerchantRotationItem]:
+        """Returns entries for a specific rotation with joined item data."""
+        qs = rotation.rotation_items.select_related("item__ball", "item__special")
         return [entry async for entry in qs]
 
-    async def _cooldown_remaining(
-        self, player: Player, cooldown: timedelta
-    ) -> timedelta:
-        qs = MerchantPurchase.objects.filter(
-            player=player
-        ).order_by("-created_at")
+    async def _get_cooldown_end(self, player: Player, cooldown_seconds: int) -> Optional[timezone.datetime]:
+        """Returns the timestamp when the player can buy again."""
+        last_purchase = await MerchantPurchase.objects.filter(player=player).order_by("-created_at").afirst()
+        if not last_purchase:
+            return None
+        
+        ready_at = last_purchase.created_at + timedelta(seconds=cooldown_seconds)
+        return ready_at if ready_at > timezone.now() else None
 
-        async for purchase in qs[:1]:
-            remaining = (
-                purchase.created_at + cooldown - timezone.now()
-            )
-            return max(remaining, timedelta())
+    # --- Slash Commands ---
 
-        return timedelta()
+    @app_commands.command(name="view", description="Check what the merchant is currently selling.")
+    async def view(self, interaction: Interaction):
+        rotation = await self.ensure_rotation()
+        if not rotation:
+            await interaction.response.send_message("The merchant is currently away.", ephemeral=True)
+            return
 
-    # ========================
-    # Embeds
-    # ========================
-
-    async def _build_embed(
-        self, rotation: MerchantRotation
-    ) -> discord.Embed:
-        entries = await self._rotation_items(rotation)
-        currency = settings.currency_name or "coins"
+        entries = await self._get_rotation_entries(rotation)
+        currency = self._get_currency_name()
 
         embed = discord.Embed(
-            title="🧳 Traveling Merchant",
-            description=(
-                f"Offers refresh "
-                f"{discord.utils.format_dt(rotation.ends_at, style='R')}."
-            ),
-            colour=discord.Colour.blurple(),
+            title="🛒 Traveling Merchant",
+            description=f"Leaves {discord.utils.format_dt(rotation.ends_at, style='R')}",
+            color=discord.Color.gold()
         )
 
         if not entries:
-            embed.description = "No offers available."
-            return embed
+            embed.description = "The merchant is sold out!"
+        else:
+            item_list = []
+            for entry in entries:
+                special_text = f" ({entry.item.special.name})" if entry.item.special else ""
+                item_list.append(
+                    f"**ID: `{entry.id}`** — {entry.item.label}{special_text}\n"
+                    f"└ Price: {entry.price_snapshot:,} {currency}"
+                )
+            embed.add_field(name="Current Stock", value="\n\n".join(item_list), inline=False)
 
-        lines = []
-        for entry in entries:
-            special = f" ({entry.item.special})" if entry.item.special else ""
-            lines.append(
-                f"`{entry.id}` — {entry.item.label}{special} "
-                f"• {entry.price_snapshot} {currency}"
-            )
+        embed.set_footer(text="Use /merchant buy <id> to purchase an item.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        embed.add_field(
-            name="Current offers",
-            value="\n".join(lines),
-            inline=False,
-        )
-        embed.set_footer(
-            text="Use /merchant buy <id> to purchase."
-        )
-        return embed
-
-    # ========================
-    # Slash commands
-    # ========================
-
-    @app_commands.command(
-        name="view",
-        description="View the current merchant rotation.",
-    )
-    async def view(self, interaction: Interaction) -> None:
-        rotation = await self.ensure_rotation()
-        if rotation is None:
-            await interaction.response.send_message(
-                "The merchant is disabled.",
-                ephemeral=True,
-            )
-            return
-
-        embed = await self._build_embed(rotation)
-        await interaction.response.send_message(
-            embed=embed,
-            ephemeral=True,
-        )
-
-    @app_commands.command(
-        name="buy",
-        description="Buy an item from the merchant.",
-    )
-    async def buy(
-        self,
-        interaction: Interaction,
-        item_id: int,
-    ) -> None:
+    @app_commands.command(name="buy", description="Purchase an item using your ID.")
+    @app_commands.describe(item_id="The numeric ID of the item from the /merchant view list")
+    async def buy(self, interaction: Interaction, item_id: int):
         config = await MerchantSettings.load()
         if not config.enabled:
-            await interaction.response.send_message(
-                "The merchant is disabled.",
-                ephemeral=True,
+            return await interaction.response.send_message("The merchant is disabled.", ephemeral=True)
+
+        rotation = await self._get_active_rotation()
+        if not rotation:
+            return await interaction.response.send_message("There is no active merchant rotation.", ephemeral=True)
+
+        # Validate Item
+        entries = await self._get_rotation_entries(rotation)
+        entry = next((e for e in entries if e.id == item_id), None)
+        if not entry:
+            return await interaction.response.send_message("That item ID is not in the current rotation.", ephemeral=True)
+
+        player, _ = await Player.objects.aget_or_create(discord_id=interaction.user.id)
+
+        # Cooldown check
+        cooldown_end = await self._get_cooldown_end(player, config.purchase_cooldown_seconds)
+        if cooldown_end:
+            return await interaction.response.send_message(
+                f"You're on cooldown! You can buy again {discord.utils.format_dt(cooldown_end, 'R')}.",
+                ephemeral=True
             )
-            return
 
-        rotation = await self.ensure_rotation()
-        if rotation is None:
-            await interaction.response.send_message(
-                "No active rotation.",
-                ephemeral=True,
+        if not player.can_afford(entry.price_snapshot):
+            return await interaction.response.send_message(
+                f"You don't have enough {self._get_currency_name()}!", ephemeral=True
             )
-            return
 
-        entries = await self._rotation_items(rotation)
-        entry = next(
-            (e for e in entries if e.id == item_id),
-            None,
-        )
-        if entry is None:
-            await interaction.response.send_message(
-                "Invalid item ID.",
-                ephemeral=True,
-            )
-            return
+        # Defer because database transactions can take a moment
+        await interaction.response.defer(ephemeral=True)
 
-        player, _ = await Player.objects.aget_or_create(
-            discord_id=interaction.user.id
-        )
+        try:
+            # Atomic transaction to prevent race conditions
+            with transaction.atomic():
+                # Re-fetch player with lock
+                locked_player = Player.objects.select_for_update().get(pk=player.pk)
+                
+                if not locked_player.can_afford(entry.price_snapshot):
+                    await interaction.followup.send("Transaction failed: Insufficient funds.")
+                    return
 
-        remaining = await self._cooldown_remaining(
-            player, config.purchase_cooldown
-        )
-        if remaining > timedelta():
-            await interaction.response.send_message(
-                f"You can buy again "
-                f"{discord.utils.format_dt(timezone.now() + remaining, style='R')}.",
-                ephemeral=True,
-            )
-            return
+                # Deduct and Give
+                locked_player.money -= entry.price_snapshot
+                locked_player.save()
 
-        price = entry.price_snapshot
-        if not player.can_afford(price):
-            await interaction.response.send_message(
-                f"You need {price} {settings.currency_name}.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.defer(
-            ephemeral=True,
-            thinking=True,
-        )
-
-        async with transaction.atomic():
-            player = await Player.objects.select_for_update().aget(
-                pk=player.pk
-            )
-            if not player.can_afford(price):
-                await interaction.followup.send(
-                    "Insufficient funds.",
-                    ephemeral=True,
+                instance = BallInstance.objects.create(
+                    ball=entry.item.ball,
+                    player=locked_player,
+                    special=entry.item.special,
+                    server_id=interaction.guild_id,
+                    tradeable=True
                 )
-                return
+                
+                MerchantPurchase.objects.create(player=locked_player, rotation_item=entry)
 
-            await player.remove_money(price)
-
-            instance = await BallInstance.objects.acreate(
-                ball_id=entry.item.ball_id,
-                player=player,
-                special_id=entry.item.special_id,
-                tradeable=True,
-                server_id=interaction.guild_id,
+            await interaction.followup.send(
+                f"✅ Success! You bought **{instance.description(include_emoji=True, bot=self.bot)}**."
             )
-
-            await MerchantPurchase.objects.acreate(
-                player=player,
-                rotation_item=entry,
-            )
-
-        await interaction.followup.send(
-            f"Purchase successful! "
-            f"{instance.description(include_emoji=True, bot=self.bot)}",
-            ephemeral=True,
-        )
-
-    # ========================
-    # Autocomplete
-    # ========================
+        except Exception:
+            log.exception("Error processing merchant purchase")
+            await interaction.followup.send("An error occurred during the purchase. Please try again.")
 
     @buy.autocomplete("item_id")
-    async def autocomplete_item(
-        self,
-        interaction: Interaction,
-        current: str,
-    ):
+    async def buy_autocomplete(self, interaction: Interaction, current: str):
         rotation = await self._get_active_rotation()
-        if rotation is None:
+        if not rotation:
             return []
 
-        entries = await self._rotation_items(rotation)
-        currency = settings.currency_name or "coins"
-
-        if current:
-            entries = [
-                e for e in entries
-                if current.lower() in e.item.label.lower()
-            ]
-
-        return [
-            app_commands.Choice(
-                name=f"{e.item.label} • {e.price_snapshot} {currency}",
-                value=e.id,
-            )
-            for e in entries[:25]
-        ]
+        entries = await self._get_rotation_entries(rotation)
+        choices = []
+        for e in entries:
+            label = f"{e.item.label} ({e.price_snapshot} {self._get_currency_name()})"
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label, value=e.id))
+        
+        return choices[:25]
