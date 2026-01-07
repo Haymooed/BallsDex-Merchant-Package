@@ -1,17 +1,18 @@
-[project]
-name = "Merchant"
-version = "0.1.0"
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
-description = "A merchant that has new balls everyday!"
-license = "MIT"  # replace with your own license
-license-files = ["LICENSE"]
+[project]
+name = "ballsdex-merchant"
+version = "0.0.0"
+
+description = "A travelling merchant to sell balls."
+license = "MIT"
 authors = [
-    { name = "haymooed" },
+    { name = "Haymooed" },
 ]
 readme = "README.md"
 
 dependencies = [
-    # you can require a specific version of ballsdex here
-    "ballsdex>=3.0.0",
-    # and extra dependencies if needed
+
 ]
