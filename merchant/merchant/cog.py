@@ -14,7 +14,8 @@ from django.utils import timezone
 
 from bd_models.models import BallInstance, Player
 from settings.models import settings
-from merchant.models import MerchantItem, MerchantPurchase, MerchantRotation, MerchantRotationItem, MerchantSettings
+
+from ..models import MerchantItem, MerchantPurchase, MerchantRotation, MerchantRotationItem, MerchantSettings
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
