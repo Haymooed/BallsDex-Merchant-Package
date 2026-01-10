@@ -34,10 +34,6 @@ class Merchant(commands.GroupCog, name="merchant"):
     async def cog_unload(self) -> None:
         self._rotation_refresher.cancel()
 
-    # ========================
-    # Rotation handling
-    # ========================
-
     @tasks.loop(minutes=5)
     async def _rotation_refresher(self) -> None:
         await self.ensure_rotation()
@@ -60,7 +56,6 @@ class Merchant(commands.GroupCog, name="merchant"):
             return await self._create_rotation(config)
 
     async def _get_active_rotation(self) -> Optional[MerchantRotation]:
-        # Using .afirst() is cleaner for fetching the first record asynchronously
         return await MerchantRotation.objects.filter(
             ends_at__gt=timezone.now()
         ).order_by("-starts_at").afirst()
@@ -118,10 +113,6 @@ class Merchant(commands.GroupCog, name="merchant"):
         qs = rotation.rotation_items.select_related("item__ball", "item__special")
         return [entry async for entry in qs]
 
-    # ========================
-    # Commands
-    # ========================
-
     @app_commands.command(name="view", description="View the current merchant rotation.")
     async def view(self, interaction: Interaction) -> None:
         rotation = await self.ensure_rotation()
@@ -169,7 +160,6 @@ class Merchant(commands.GroupCog, name="merchant"):
 
         player, _ = await Player.objects.aget_or_create(discord_id=interaction.user.id)
 
-        # Cooldown Check
         last_purchase = await MerchantPurchase.objects.filter(player=player).order_by("-created_at").afirst()
         if last_purchase:
             cooldown = timedelta(seconds=config.purchase_cooldown_seconds)
@@ -187,14 +177,12 @@ class Merchant(commands.GroupCog, name="merchant"):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        # Define the transaction logic
         def process_purchase():
             with transaction.atomic():
                 p = Player.objects.select_for_update().get(pk=player.pk)
                 if not p.can_afford(entry.price_snapshot):
                     return None, "Insufficient funds."
                 
-                # Standard BallsDex v3 logic for removing money
                 p.money -= entry.price_snapshot
                 p.save()
 
@@ -204,11 +192,12 @@ class Merchant(commands.GroupCog, name="merchant"):
                     special=entry.item.special,
                     server_id=interaction.guild_id,
                     tradeable=True,
+                    attack_bonus=random.randint(-settings.max_attack_bonus, settings.max_attack_bonus),
+                    health_bonus=random.randint(-settings.max_health_bonus, settings.max_health_bonus),
                 )
                 MerchantPurchase.objects.create(player=p, rotation_item=entry)
                 return inst, None
 
-        # Run transaction in a thread to keep it safe for async
         instance, error = await sync_to_async(process_purchase)()
 
         if error:

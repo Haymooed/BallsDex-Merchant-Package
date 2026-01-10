@@ -9,7 +9,6 @@ class MerchantSettingsAdmin(admin.ModelAdmin):
     readonly_fields = ("last_rotation_at",)
 
     def has_add_permission(self, request):
-        # enforce singleton; editing is allowed but creation is not
         return False
 
 
@@ -34,7 +33,6 @@ class MerchantRotationAdmin(admin.ModelAdmin):
     inlines = (MerchantRotationItemInline,)
 
     def has_add_permission(self, request):
-        # rotations are generated automatically
         return False
 
 
