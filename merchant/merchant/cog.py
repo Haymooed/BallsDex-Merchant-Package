@@ -140,12 +140,12 @@ class Merchant(commands.GroupCog, name="merchant"):
         embed = discord.Embed(
             title="🧳 The Traveling Merchant",
             description=(
-                "Step right up — a fresh selection of curios is available now.\n"
+                "Step right up - a fresh selection of curios is available now.\n"
                 f"⏳ **Next refresh:** {discord.utils.format_dt(rotation.ends_at, style='R')}"
             ),
             colour=discord.Colour.gold(),
         )
-        embed.set_footer(text="Use /merchant buy <item_id> to claim an offer")
+        embed.set_footer(text="Use `/merchant buy <item_id>` to claim an offer")
 
         if not entries:
             embed.description = "The merchant has nothing to sell right now."
@@ -235,12 +235,12 @@ class Merchant(commands.GroupCog, name="merchant"):
                 colour=discord.Colour.green(),
             )
             purchase_embed.add_field(
-                name="💸 Cost",
+                name="Cost",
                 value=self._format_price(entry.price_snapshot, currency),
                 inline=True,
             )
             purchase_embed.add_field(
-                name="🏦 Remaining Balance",
+                name="Remaining Balance",
                 value=self._format_price(remaining_balance, currency),
                 inline=True,
             )
