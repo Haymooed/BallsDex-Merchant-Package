@@ -16,3 +16,9 @@ readme = "README.md"
 dependencies = [
 
 ]
+
+[project.urls]
+Repository = "https://github.com/Haymooed/BallsDex-Merchant-Package"
+Documentation = "https://github.com/Haymooed/BallsDex-Merchant-Package#readme"
+Issues = "https://github.com/Haymooed/BallsDex-Merchant-Package/issues"
+Funding = "https://www.patreon.com/c/MarketDexOfficial"
