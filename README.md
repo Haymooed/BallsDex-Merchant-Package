@@ -1,5 +1,6 @@
 # BallsDex V3 Merchant Package
 [![Support me on Patreon](https://img.shields.io/badge/Patreon-F96854?style=for-the-badge&logo=patreon&logoColor=white)](https://www.patreon.com/MarketDexOfficial?utm_campaign=creatorshare_creator)
+
 Traveling merchant package for **BallsDex V3**. Provides rotating offers, admin-managed item pool, and slash commands for browsing and purchasing collectibles.
 
 ## Installation (extra.toml)
