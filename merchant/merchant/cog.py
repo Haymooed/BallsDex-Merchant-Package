@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 Interaction = discord.Interaction["BallsDexBot"]
 
 class Merchant(commands.GroupCog, name="merchant"):
-    """Traveling merchant system (BallsDex v3 compatible)."""
+    """Merchant system (BallsDex v3 compatible)."""
 
     def __init__(self, bot: "BallsDexBot"):
         self.bot = bot
@@ -120,12 +120,12 @@ class Merchant(commands.GroupCog, name="merchant"):
     @staticmethod
     def _rarity_tag(weight: int) -> str:
         if weight <= 5:
-            return "🌌 Legendary"
+            return "Legendary"
         if weight <= 15:
-            return "💎 Rare"
+            return "Rare"
         if weight <= 35:
-            return "✨ Uncommon"
-        return "📦 Common"
+            return "Uncommon"
+        return "Common"
 
     @app_commands.command(name="view", description="View the current merchant rotation.")
     async def view(self, interaction: Interaction) -> None:
@@ -138,27 +138,24 @@ class Merchant(commands.GroupCog, name="merchant"):
         currency = settings.currency_name or "coins"
 
         embed = discord.Embed(
-            title="🧳 The Traveling Merchant",
-            description=(
-                "Step right up - a fresh selection of curios is available now.\n"
-                f"⏳ **Next refresh:** {discord.utils.format_dt(rotation.ends_at, style='R')}"
-            ),
-            colour=discord.Colour.gold(),
+            title="Merchant Store",
+            description=f"⏳ **Refreshes:** {discord.utils.format_dt(rotation.ends_at, style='R')}",
+            colour=discord.Colour.blue(),
         )
-        embed.set_footer(text="Use `/merchant buy <item_id>` to claim an offer")
+        embed.set_footer(text="Use /merchant buy <item_id> to purchase an item.")
 
         if not entries:
-            embed.description = "The merchant has nothing to sell right now."
+            embed.description = "No items are currently available."
         else:
             lines = []
             for entry in entries:
-                special = f" • {entry.item.special.name}" if entry.item.special else ""
+                special = f" ({entry.item.special.name})" if entry.item.special else ""
                 rarity = self._rarity_tag(entry.item.weight)
                 lines.append(
-                    f"`#{entry.id}` **{entry.item.label}**{special}\n"
-                    f"└ {rarity} • 💰 {self._format_price(entry.price_snapshot, currency)}"
+                    f"`ID: {entry.id}` **{entry.item.label}**{special}\n"
+                    f"└ {rarity} | {self._format_price(entry.price_snapshot, currency)}"
                 )
-            embed.add_field(name="✨ Current Stock", value="\n\n".join(lines), inline=False)
+            embed.add_field(name="Available Items", value="\n\n".join(lines), inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -171,14 +168,15 @@ class Merchant(commands.GroupCog, name="merchant"):
 
         rotation = await self.ensure_rotation()
         if not rotation:
-            await interaction.response.send_message("No active rotation.", ephemeral=True)
+            await interaction.response.send_message("There is no active rotation.", ephemeral=True)
             return
 
         entries = await self._get_rotation_items(rotation)
         entry = next((e for e in entries if e.id == item_id), None)
         if not entry:
-            await interaction.response.send_message("Invalid item ID. Check `/merchant view`.", ephemeral=True)
+            await interaction.response.send_message("Invalid item ID.", ephemeral=True)
             return
+            
         currency = settings.currency_name or "coins"
 
         player, _ = await Player.objects.aget_or_create(discord_id=interaction.user.id)
@@ -189,14 +187,14 @@ class Merchant(commands.GroupCog, name="merchant"):
             if timezone.now() < last_purchase.created_at + cooldown:
                 ready_at = last_purchase.created_at + cooldown
                 await interaction.response.send_message(
-                    f"You're on cooldown! You can buy again {discord.utils.format_dt(ready_at, 'R')}.",
+                    f"Purchase on cooldown. Try again {discord.utils.format_dt(ready_at, 'R')}.",
                     ephemeral=True
                 )
                 return
 
         if not player.can_afford(entry.price_snapshot):
             await interaction.response.send_message(
-                f"You need **{self._format_price(entry.price_snapshot, currency)}** for this item.",
+                f"Insufficient funds. You need **{self._format_price(entry.price_snapshot, currency)}**.",
                 ephemeral=True,
             )
             return
@@ -230,21 +228,20 @@ class Merchant(commands.GroupCog, name="merchant"):
             await interaction.followup.send(error, ephemeral=True)
         else:
             purchase_embed = discord.Embed(
-                title="✅ Purchase Complete",
-                description=f"You purchased **{instance.description(include_emoji=True, bot=self.bot)}**.",
+                title="Purchase Successful",
+                description=f"Acquired **{instance.description(include_emoji=True, bot=self.bot)}**.",
                 colour=discord.Colour.green(),
             )
             purchase_embed.add_field(
-                name="Cost",
+                name="Price Paid",
                 value=self._format_price(entry.price_snapshot, currency),
                 inline=True,
             )
             purchase_embed.add_field(
-                name="Remaining Balance",
+                name="New Balance",
                 value=self._format_price(remaining_balance, currency),
                 inline=True,
             )
-            purchase_embed.set_footer(text="Thanks for shopping with the Traveling Merchant")
             await interaction.followup.send(embed=purchase_embed, ephemeral=True)
 
     @buy.autocomplete("item_id")
