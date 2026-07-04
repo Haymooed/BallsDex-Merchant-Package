@@ -1,12 +1,28 @@
 from django.contrib import admin
 
-from .models import MerchantItem, MerchantPurchase, MerchantRotation, MerchantRotationItem, MerchantSettings
+from .models import MerchantItem, MerchantPurchase, MerchantRotation, MerchantRotationItem, MerchantSettings, ActiveMerchant
 
 
 @admin.register(MerchantSettings)
 class MerchantSettingsAdmin(admin.ModelAdmin):
-    list_display = ("enabled", "rotation_minutes", "items_per_rotation", "purchase_cooldown_seconds", "last_rotation_at")
+    list_display = (
+        "enabled",
+        "rotation_minutes",
+        "items_per_rotation",
+        "purchase_cooldown_seconds",
+        "sale_percentage",
+        "last_rotation_at",
+    )
     readonly_fields = ("last_rotation_at",)
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(ActiveMerchant)
+class ActiveMerchantAdmin(admin.ModelAdmin):
+    list_display = ("guild_id", "channel_id", "message_id", "created_at")
+    readonly_fields = ("guild_id", "channel_id", "message_id", "created_at")
 
     def has_add_permission(self, request):
         return False
