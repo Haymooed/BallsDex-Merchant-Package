@@ -26,6 +26,9 @@ class MerchantSettings(models.Model):
         default=3600, help_text="Cooldown between purchases for the same player, in seconds."
     )
     last_rotation_at = models.DateTimeField(null=True, blank=True)
+    sale_percentage = models.PositiveSmallIntegerField(
+        default=0, help_text="Global sale percentage (0-100). Increases the attractiveness of offers."
+    )
 
     class Meta:
         verbose_name = "Merchant settings"
@@ -107,9 +110,29 @@ class MerchantRotationItem(models.Model):
     def __str__(self) -> str:
         return f"{self.item.label} ({self.price_snapshot})"
 
-    def as_line(self, currency_name: str, collectible_name: str) -> str:
+    def get_price(self, sale_percentage: int = 0) -> int:
+        if sale_percentage <= 0:
+            return self.price_snapshot
+        return int(self.price_snapshot * (1 - min(sale_percentage, 100) / 100))
+
+    def as_line(self, currency_name: str, collectible_name: str, sale_percentage: int = 0) -> str:
         special = f" ({self.item.special})" if self.item.special else ""
-        return f"{self.item.label}{special} — {self.price_snapshot} {currency_name} ({collectible_name})"
+        price = self.get_price(sale_percentage)
+        return f"{self.item.label}{special} — {price} {currency_name} ({collectible_name})"
+
+
+class ActiveMerchant(models.Model):
+    """
+    Tracks active merchant messages in channels.
+    """
+
+    guild_id = models.BigIntegerField()
+    channel_id = models.BigIntegerField()
+    message_id = models.BigIntegerField(unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Active merchant"
 
 
 class MerchantPurchase(models.Model):
