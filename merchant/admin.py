@@ -1,11 +1,19 @@
 from django.contrib import admin
 
-from .models import MerchantItem, MerchantPurchase, MerchantRotation, MerchantRotationItem, MerchantSettings, ActiveMerchant
+from .models import (
+    ActiveMerchant,
+    Merchant,
+    MerchantItem,
+    MerchantPurchase,
+    MerchantRotation,
+    MerchantRotationItem,
+)
 
 
-@admin.register(MerchantSettings)
-class MerchantSettingsAdmin(admin.ModelAdmin):
+@admin.register(Merchant)
+class MerchantAdmin(admin.ModelAdmin):
     list_display = (
+        "name",
         "enabled",
         "rotation_minutes",
         "items_per_rotation",
@@ -13,16 +21,17 @@ class MerchantSettingsAdmin(admin.ModelAdmin):
         "sale_percentage",
         "last_rotation_at",
     )
+    list_filter = ("enabled",)
+    search_fields = ("name",)
+    filter_horizontal = ("items",)
     readonly_fields = ("last_rotation_at",)
-
-    def has_add_permission(self, request):
-        return False
 
 
 @admin.register(ActiveMerchant)
 class ActiveMerchantAdmin(admin.ModelAdmin):
-    list_display = ("guild_id", "channel_id", "message_id", "created_at")
-    readonly_fields = ("guild_id", "channel_id", "message_id", "created_at")
+    list_display = ("merchant", "guild_id", "channel_id", "message_id", "created_at")
+    readonly_fields = ("merchant", "guild_id", "channel_id", "message_id", "created_at")
+    list_filter = ("merchant",)
 
     def has_add_permission(self, request):
         return False
@@ -44,8 +53,9 @@ class MerchantRotationItemInline(admin.TabularInline):
 
 @admin.register(MerchantRotation)
 class MerchantRotationAdmin(admin.ModelAdmin):
-    list_display = ("starts_at", "ends_at")
-    readonly_fields = ("starts_at", "ends_at")
+    list_display = ("merchant", "starts_at", "ends_at")
+    readonly_fields = ("merchant", "starts_at", "ends_at")
+    list_filter = ("merchant",)
     inlines = (MerchantRotationItemInline,)
 
     def has_add_permission(self, request):
