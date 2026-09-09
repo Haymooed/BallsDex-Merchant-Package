@@ -16,7 +16,14 @@ from asgiref.sync import sync_to_async
 from bd_models.models import BallInstance, Player
 from settings.models import settings
 
-from merchant.models import MerchantItem, MerchantPurchase, MerchantRotation, MerchantRotationItem, MerchantSettings, ActiveMerchant
+from merchant.models import (
+    ActiveMerchant,
+    Merchant as MerchantModel,
+    MerchantItem,
+    MerchantPurchase,
+    MerchantRotation,
+    MerchantRotationItem,
+)
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
@@ -24,15 +31,19 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 Interaction = discord.Interaction["BallsDexBot"]
 
+
 class MerchantView(discord.ui.View):
-    def __init__(self, entries: List[MerchantRotationItem], sale_percentage: int):
+    def __init__(self, entries: List[MerchantRotationItem], sale_percentage: int = 0):
         super().__init__(timeout=None)
         for entry in entries:
-            self.add_item(discord.ui.Button(
-                label=f"Buy {entry.item.label}",
-                style=discord.ButtonStyle.green,
-                custom_id=f"merchant:buy:{entry.id}"
-            ))
+            self.add_item(
+                discord.ui.Button(
+                    label=f"Buy {entry.item.label}",
+                    style=discord.ButtonStyle.green,
+                    custom_id=f"merchant:buy:{entry.id}",
+                )
+            )
+
 
 class Merchant(commands.GroupCog, name="merchant"):
     """Traveling Merchant system."""
@@ -47,50 +58,68 @@ class Merchant(commands.GroupCog, name="merchant"):
 
     @tasks.loop(minutes=5)
     async def _rotation_refresher(self) -> None:
-        rotation = await self.ensure_rotation()
-        if rotation:
-            await self.update_all_merchants(rotation)
+        async for merchant_inst in MerchantModel.objects.filter(enabled=True):
+            rotation = await self.ensure_rotation(merchant_inst)
+            if rotation:
+                await self.update_merchant_instances(merchant_inst, rotation)
 
     @_rotation_refresher.before_loop
     async def _before_rotation_loop(self) -> None:
         await self.bot.wait_until_ready()
 
-    async def ensure_rotation(self) -> Optional[MerchantRotation]:
+    async def ensure_rotation(self, merchant: MerchantModel) -> Optional[MerchantRotation]:
         async with self._rotation_lock:
-            config = await MerchantSettings.load()
-            if not config.enabled:
+            if not merchant.enabled:
                 return None
 
             now = timezone.now()
-            rotation = await self._get_active_rotation()
+            rotation = await self._get_active_rotation(merchant)
             if rotation and rotation.ends_at > now:
                 return rotation
 
-            return await self._create_rotation(config)
+            return await self._create_rotation(merchant)
 
-    async def _get_active_rotation(self) -> Optional[MerchantRotation]:
-        return await MerchantRotation.objects.filter(
-            ends_at__gt=timezone.now()
-        ).order_by("-starts_at").afirst()
+    async def _get_active_rotation(self, merchant: MerchantModel) -> Optional[MerchantRotation]:
+        return (
+            await MerchantRotation.objects.filter(
+                merchant=merchant, ends_at__gt=timezone.now()
+            )
+            .order_by("-starts_at")
+            .afirst()
+        )
 
-    async def _create_rotation(self, config: MerchantSettings) -> Optional[MerchantRotation]:
-        qs = (
-            MerchantItem.objects.filter(enabled=True)
+    async def _create_rotation(self, merchant: MerchantModel) -> Optional[MerchantRotation]:
+        item_qs = (
+            merchant.items.filter(enabled=True)
             .select_related("ball", "special")
             .order_by("id")
         )
-        items = [item async for item in qs]
+        items = [item async for item in item_qs]
+
         if not items:
-            log.warning("Merchant rotation skipped: no enabled items found in database.")
+            all_qs = (
+                MerchantItem.objects.filter(enabled=True)
+                .select_related("ball", "special")
+                .order_by("id")
+            )
+            items = [item async for item in all_qs]
+
+        if not items:
+            log.warning(
+                "Merchant '%s' (ID %s) rotation skipped: no enabled items found.",
+                merchant.name,
+                merchant.pk,
+            )
             return None
 
-        count = min(config.items_per_rotation, len(items))
+        count = min(merchant.items_per_rotation, len(items))
         selection = self._weighted_sample(items, count)
 
         now = timezone.now()
         rotation = await MerchantRotation.objects.acreate(
+            merchant=merchant,
             starts_at=now,
-            ends_at=now + timedelta(minutes=config.rotation_minutes),
+            ends_at=now + timedelta(minutes=merchant.rotation_minutes),
         )
 
         await MerchantRotationItem.objects.abulk_create(
@@ -104,11 +133,11 @@ class Merchant(commands.GroupCog, name="merchant"):
             ]
         )
 
-        await MerchantSettings.objects.filter(pk=config.pk).aupdate(
-            last_rotation_at=now
-        )
+        await MerchantModel.objects.filter(pk=merchant.pk).aupdate(last_rotation_at=now)
 
-        log.info("Merchant rotation created with %s items.", len(selection))
+        log.info(
+            "Merchant '%s' rotation created with %s items.", merchant.name, len(selection)
+        )
         return rotation
 
     @staticmethod
@@ -122,7 +151,9 @@ class Merchant(commands.GroupCog, name="merchant"):
             pool.remove(pick)
         return chosen
 
-    async def _get_rotation_items(self, rotation: MerchantRotation) -> List[MerchantRotationItem]:
+    async def _get_rotation_items(
+        self, rotation: MerchantRotation
+    ) -> List[MerchantRotationItem]:
         qs = rotation.rotation_items.select_related("item__ball", "item__special")
         return [entry async for entry in qs]
 
@@ -140,19 +171,29 @@ class Merchant(commands.GroupCog, name="merchant"):
             return "Uncommon"
         return "Common"
 
-    def _get_embed(self, rotation: MerchantRotation, entries: List[MerchantRotationItem], sale_percentage: int) -> discord.Embed:
+    def _get_embed(
+        self,
+        merchant: MerchantModel,
+        rotation: MerchantRotation,
+        entries: List[MerchantRotationItem],
+    ) -> discord.Embed:
         currency = settings.currency_name or "coins"
+        sale_percentage = merchant.sale_percentage
+
         embed = discord.Embed(
-            title="✨ Traveling Merchant ✨",
-            description=f"The merchant has arrived with new wares!\n⏳ **Refreshes:** {discord.utils.format_dt(rotation.ends_at, style='R')}",
+            title=f"✨ {merchant.name} ✨",
+            description=(
+                f"The merchant has arrived with new wares!\n"
+                f"⏳ **Refreshes:** {discord.utils.format_dt(rotation.ends_at, style='R')}"
+            ),
             colour=discord.Colour.gold(),
         )
         if sale_percentage > 0:
-            embed.title = f"✨ Traveling Merchant - {sale_percentage}% OFF SALE! ✨"
+            embed.title = f"✨ {merchant.name} - {sale_percentage}% OFF SALE! ✨"
             embed.colour = discord.Colour.red()
 
         if not entries:
-            embed.description = "The merchant is currently out of stock."
+            embed.description = f"The {merchant.name} is currently out of stock."
         else:
             for entry in entries:
                 price = entry.get_price(sale_percentage)
@@ -167,17 +208,18 @@ class Merchant(commands.GroupCog, name="merchant"):
                 embed.add_field(
                     name=f"{entry.item.label}{special}",
                     value=f"Rarity: {rarity}\nPrice: {price_text}",
-                    inline=True
+                    inline=True,
                 )
 
         embed.set_footer(text="Click the buttons below to purchase!")
         return embed
 
-    async def update_all_merchants(self, rotation: MerchantRotation):
-        config = await MerchantSettings.load()
+    async def update_merchant_instances(
+        self, merchant: MerchantModel, rotation: MerchantRotation
+    ):
         items = await self._get_rotation_items(rotation)
 
-        async for active in ActiveMerchant.objects.all():
+        async for active in ActiveMerchant.objects.filter(merchant=merchant):
             guild = self.bot.get_guild(active.guild_id)
             if not guild:
                 continue
@@ -187,35 +229,87 @@ class Merchant(commands.GroupCog, name="merchant"):
 
             try:
                 message = await channel.fetch_message(active.message_id)
-                embed = self._get_embed(rotation, items, config.sale_percentage)
-                view = MerchantView(items, config.sale_percentage)
+                embed = self._get_embed(merchant, rotation, items)
+                view = MerchantView(items, merchant.sale_percentage)
                 await message.edit(embed=embed, view=view)
             except discord.NotFound:
                 await active.adelete()
             except Exception:
                 log.exception(f"Failed to update merchant message {active.message_id}")
 
-    @app_commands.command(name="send", description="Send the merchant message to this channel.")
+    async def update_all_merchants(self, rotation: MerchantRotation):
+        """Helper maintaining compatibility with single-rotation calls."""
+        merchant = rotation.merchant
+        await self.update_merchant_instances(merchant, rotation)
+
+    async def merchant_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> List[app_commands.Choice[int]]:
+        choices = []
+        async for m in MerchantModel.objects.filter(enabled=True):
+            if current.lower() in m.name.lower():
+                choices.append(app_commands.Choice(name=m.name, value=m.pk))
+        return choices[:25]
+
+    @app_commands.command(name="send", description="Send a merchant message to this channel.")
+    @app_commands.describe(merchant="Select which merchant to send")
+    @app_commands.autocomplete(merchant=merchant_autocomplete)
     @app_commands.checks.has_permissions(administrator=True)
-    async def send(self, interaction: Interaction) -> None:
-        rotation = await self.ensure_rotation()
-        if not rotation:
-            await interaction.response.send_message("The merchant is currently unavailable.", ephemeral=True)
+    async def send(self, interaction: Interaction, merchant: Optional[int] = None) -> None:
+        enabled_merchants = [m async for m in MerchantModel.objects.filter(enabled=True)]
+        if not enabled_merchants:
+            await interaction.response.send_message(
+                "No enabled merchants available.", ephemeral=True
+            )
             return
 
-        config = await MerchantSettings.load()
+        selected_merchant: Optional[MerchantModel] = None
+        if merchant is not None:
+            selected_merchant = await MerchantModel.objects.filter(
+                pk=merchant, enabled=True
+            ).afirst()
+            if not selected_merchant:
+                await interaction.response.send_message(
+                    "Selected merchant not found or is disabled.", ephemeral=True
+                )
+                return
+        else:
+            if len(enabled_merchants) == 1:
+                selected_merchant = enabled_merchants[0]
+            else:
+                await interaction.response.send_message(
+                    "Multiple merchants exist. Please specify the merchant parameter.",
+                    ephemeral=True,
+                )
+                return
+
+        rotation = await self.ensure_rotation(selected_merchant)
+        if not rotation:
+            await interaction.response.send_message(
+                f"Merchant '{selected_merchant.name}' is currently unavailable.", ephemeral=True
+            )
+            return
+
         entries = await self._get_rotation_items(rotation)
+        embed = self._get_embed(selected_merchant, rotation, entries)
+        view = MerchantView(entries, selected_merchant.sale_percentage)
 
-        embed = self._get_embed(rotation, entries, config.sale_percentage)
-        view = MerchantView(entries, config.sale_percentage)
-
-        await interaction.response.send_message("Merchant message sent!", ephemeral=True)
+        await interaction.response.send_message(
+            f"Merchant '{selected_merchant.name}' message sent!", ephemeral=True
+        )
         message = await interaction.channel.send(embed=embed, view=view)
 
-        await ActiveMerchant.objects.acreate(
+        await ActiveMerchant.objects.filter(
             guild_id=interaction.guild_id,
             channel_id=interaction.channel_id,
-            message_id=message.id
+            merchant=selected_merchant,
+        ).adelete()
+
+        await ActiveMerchant.objects.acreate(
+            merchant=selected_merchant,
+            guild_id=interaction.guild_id,
+            channel_id=interaction.channel_id,
+            message_id=message.id,
         )
 
     @commands.Cog.listener()
@@ -233,34 +327,43 @@ class Merchant(commands.GroupCog, name="merchant"):
         except ValueError:
             return
 
-        config = await MerchantSettings.load()
-        if not config.enabled:
-            await interaction.followup.send("The merchant is currently closed.", ephemeral=True)
-            return
-
-        rotation = await self._get_active_rotation()
-        if not rotation:
-            await interaction.followup.send("There is no active rotation.", ephemeral=True)
-            return
-
-        entry = await MerchantRotationItem.objects.filter(rotation=rotation, id=item_id).select_related("item__ball", "item__special").afirst()
+        entry = (
+            await MerchantRotationItem.objects.filter(id=item_id)
+            .select_related("rotation__merchant", "item__ball", "item__special")
+            .afirst()
+        )
         if not entry:
             await interaction.followup.send("This item is no longer available.", ephemeral=True)
             return
-            
+
+        merchant = entry.rotation.merchant
+        if not merchant.enabled:
+            await interaction.followup.send("This merchant is currently closed.", ephemeral=True)
+            return
+
+        if not entry.rotation.is_active():
+            await interaction.followup.send("This offer has expired.", ephemeral=True)
+            return
+
         currency = settings.currency_name or "coins"
-        price = entry.get_price(config.sale_percentage)
+        price = entry.get_price(merchant.sale_percentage)
 
         player, _ = await Player.objects.aget_or_create(discord_id=interaction.user.id)
 
-        last_purchase = await MerchantPurchase.objects.filter(player=player).order_by("-created_at").afirst()
+        last_purchase = (
+            await MerchantPurchase.objects.filter(
+                player=player, rotation_item__rotation__merchant=merchant
+            )
+            .order_by("-created_at")
+            .afirst()
+        )
         if last_purchase:
-            cooldown = timedelta(seconds=config.purchase_cooldown_seconds)
+            cooldown = timedelta(seconds=merchant.purchase_cooldown_seconds)
             if timezone.now() < last_purchase.created_at + cooldown:
                 ready_at = last_purchase.created_at + cooldown
                 await interaction.followup.send(
                     f"Purchase on cooldown. Try again {discord.utils.format_dt(ready_at, 'R')}.",
-                    ephemeral=True
+                    ephemeral=True,
                 )
                 return
 
@@ -276,7 +379,7 @@ class Merchant(commands.GroupCog, name="merchant"):
                 p = Player.objects.select_for_update().get(pk=player.pk)
                 if not p.can_afford(price):
                     return None, "Insufficient funds.", None
-                
+
                 p.money -= price
                 p.save()
 
@@ -286,8 +389,12 @@ class Merchant(commands.GroupCog, name="merchant"):
                     special=entry.item.special,
                     server_id=interaction.guild_id,
                     tradeable=True,
-                    attack_bonus=random.randint(-settings.max_attack_bonus, settings.max_attack_bonus),
-                    health_bonus=random.randint(-settings.max_health_bonus, settings.max_health_bonus),
+                    attack_bonus=random.randint(
+                        -settings.max_attack_bonus, settings.max_attack_bonus
+                    ),
+                    health_bonus=random.randint(
+                        -settings.max_health_bonus, settings.max_health_bonus
+                    ),
                 )
                 MerchantPurchase.objects.create(player=p, rotation_item=entry)
                 return inst, None, p.money
