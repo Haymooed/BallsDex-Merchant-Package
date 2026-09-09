@@ -9,13 +9,16 @@ from django.utils import timezone
 from bd_models.models import Ball, BallInstance, Player, Special
 
 
-class MerchantSettings(models.Model):
+class Merchant(models.Model):
     """
-    Singleton-like model to hold merchant configuration managed from the admin panel.
+    Model holding merchant configuration managed from the admin panel.
+    Multiple merchants can be created and managed independently.
     """
 
-    singleton_id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
-    enabled = models.BooleanField(default=True, help_text="Disable to hide the merchant entirely.")
+    name = models.CharField(
+        max_length=64, default="Traveling Merchant", help_text="Merchant name displayed in Discord and Admin."
+    )
+    enabled = models.BooleanField(default=True, help_text="Disable to hide this merchant entirely.")
     rotation_minutes = models.PositiveIntegerField(
         default=24 * 60, help_text="How long a rotation lasts, in minutes. Default: 24h."
     )
@@ -27,18 +30,31 @@ class MerchantSettings(models.Model):
     )
     last_rotation_at = models.DateTimeField(null=True, blank=True)
     sale_percentage = models.PositiveSmallIntegerField(
-        default=0, help_text="Global sale percentage (0-100). Increases the attractiveness of offers."
+        default=0, help_text="Sale/discount percentage (0-100). Increases the attractiveness of offers."
+    )
+    items = models.ManyToManyField(
+        "MerchantItem",
+        blank=True,
+        related_name="merchants",
+        help_text="Items assigned to this merchant. If none selected, all enabled items are available.",
     )
 
     class Meta:
-        verbose_name = "Merchant settings"
+        verbose_name = "Merchant"
+        verbose_name_plural = "Merchants"
+
+    def __str__(self) -> str:
+        return self.name
 
     @classmethod
-    async def load(cls) -> "MerchantSettings":
+    async def load(cls) -> "Merchant":
         """
-        Retrieve the singleton settings instance, creating it with defaults if missing.
+        Retrieve the default/first merchant instance, creating it with defaults if missing.
+        Maintained for backward compatibility.
         """
-        instance, _ = await cls.objects.aget_or_create(pk=1)
+        instance = await cls.objects.afirst()
+        if not instance:
+            instance = await cls.objects.acreate()
         return instance
 
     @property
@@ -50,9 +66,13 @@ class MerchantSettings(models.Model):
         return timedelta(seconds=self.purchase_cooldown_seconds)
 
 
+# Alias for backward compatibility
+MerchantSettings = Merchant
+
+
 class MerchantItem(models.Model):
     """
-    Configurable item pool entry for the merchant rotations.
+    Configurable item pool entry for merchant rotations.
     """
 
     display_name = models.CharField(
@@ -78,14 +98,18 @@ class MerchantItem(models.Model):
 
 class MerchantRotation(models.Model):
     """
-    Stores generated rotations to persist across restarts.
+    Stores generated rotations for a specific merchant to persist across restarts.
     """
 
+    merchant = models.ForeignKey(Merchant, on_delete=models.CASCADE, related_name="rotations")
     starts_at = models.DateTimeField()
     ends_at = models.DateTimeField()
 
     class Meta:
         ordering = ("-starts_at",)
+
+    def __str__(self) -> str:
+        return f"{self.merchant.name} rotation ({self.starts_at.strftime('%Y-%m-%d %H:%M')})"
 
     def is_active(self) -> bool:
         return self.ends_at > timezone.now()
@@ -110,12 +134,14 @@ class MerchantRotationItem(models.Model):
     def __str__(self) -> str:
         return f"{self.item.label} ({self.price_snapshot})"
 
-    def get_price(self, sale_percentage: int = 0) -> int:
+    def get_price(self, sale_percentage: int | None = None) -> int:
+        if sale_percentage is None:
+            sale_percentage = self.rotation.merchant.sale_percentage
         if sale_percentage <= 0:
             return self.price_snapshot
         return int(self.price_snapshot * (1 - min(sale_percentage, 100) / 100))
 
-    def as_line(self, currency_name: str, collectible_name: str, sale_percentage: int = 0) -> str:
+    def as_line(self, currency_name: str, collectible_name: str, sale_percentage: int | None = None) -> str:
         special = f" ({self.item.special})" if self.item.special else ""
         price = self.get_price(sale_percentage)
         return f"{self.item.label}{special} — {price} {currency_name} ({collectible_name})"
@@ -126,6 +152,7 @@ class ActiveMerchant(models.Model):
     Tracks active merchant messages in channels.
     """
 
+    merchant = models.ForeignKey(Merchant, on_delete=models.CASCADE, related_name="active_instances")
     guild_id = models.BigIntegerField()
     channel_id = models.BigIntegerField()
     message_id = models.BigIntegerField(unique=True)
@@ -133,6 +160,10 @@ class ActiveMerchant(models.Model):
 
     class Meta:
         verbose_name = "Active merchant"
+        verbose_name_plural = "Active merchants"
+
+    def __str__(self) -> str:
+        return f"{self.merchant.name} in channel {self.channel_id}"
 
 
 class MerchantPurchase(models.Model):
