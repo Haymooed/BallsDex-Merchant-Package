@@ -10,7 +10,7 @@ def migrate_settings_to_merchant(apps, schema_editor):
 
     settings_obj = MerchantSettings.objects.first()
     if settings_obj:
-        merchant_inst = Merchant.objects.create(
+        merchant = Merchant.objects.create(
             name="Traveling Merchant",
             enabled=settings_obj.enabled,
             rotation_minutes=settings_obj.rotation_minutes,
@@ -20,23 +20,28 @@ def migrate_settings_to_merchant(apps, schema_editor):
             sale_percentage=settings_obj.sale_percentage,
         )
     else:
-        merchant_inst = Merchant.objects.create(name="Traveling Merchant")
+        merchant = Merchant.objects.create(name="Traveling Merchant")
 
-    MerchantRotation.objects.filter(merchant__isnull=True).update(merchant=merchant_inst)
-    ActiveMerchant.objects.filter(merchant__isnull=True).update(merchant=merchant_inst)
+    MerchantRotation.objects.filter(merchant__isnull=True).update(merchant=merchant)
+    ActiveMerchant.objects.filter(merchant__isnull=True).update(merchant=merchant)
 
 
 class Migration(migrations.Migration):
-
-    dependencies = [
-        ("merchant", "0002_activemerchant_merchantsettings_sale_percentage"),
-    ]
+    dependencies = [("merchant", "0003_activemerchant_merchantsettings_sale_percentage")]
 
     operations = [
         migrations.CreateModel(
             name="Merchant",
             fields=[
-                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
                 (
                     "name",
                     models.CharField(
@@ -49,19 +54,22 @@ class Migration(migrations.Migration):
                 (
                     "rotation_minutes",
                     models.PositiveIntegerField(
-                        default=1440, help_text="How long a rotation lasts, in minutes. Default: 24h."
+                        default=1440,
+                        help_text="How long a rotation lasts, in minutes. Default: 24h.",
                     ),
                 ),
                 (
                     "items_per_rotation",
                     models.PositiveSmallIntegerField(
-                        default=3, help_text="How many offers are selected for each rotation."
+                        default=3,
+                        help_text="How many offers are selected for each rotation.",
                     ),
                 ),
                 (
                     "purchase_cooldown_seconds",
                     models.PositiveIntegerField(
-                        default=3600, help_text="Cooldown between purchases for the same player, in seconds."
+                        default=3600,
+                        help_text="Cooldown between purchases for the same player, in seconds.",
                     ),
                 ),
                 ("last_rotation_at", models.DateTimeField(blank=True, null=True)),
@@ -126,9 +134,7 @@ class Migration(migrations.Migration):
                 to="merchant.merchant",
             ),
         ),
-        migrations.DeleteModel(
-            name="MerchantSettings",
-        ),
+        migrations.DeleteModel(name="MerchantSettings"),
         migrations.AlterModelOptions(
             name="activemerchant",
             options={"verbose_name": "Active merchant", "verbose_name_plural": "Active merchants"},

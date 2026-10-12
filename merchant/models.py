@@ -82,8 +82,40 @@ class MerchantItem(models.Model):
     price = models.PositiveBigIntegerField(default=1000, help_text="Price charged to the player.")
     weight = models.PositiveIntegerField(default=1, help_text="Relative selection weight for rotations.")
     enabled = models.BooleanField(default=True)
-    ball = models.ForeignKey(Ball, on_delete=models.CASCADE)
-    special = models.ForeignKey(Special, null=True, blank=True, on_delete=models.SET_NULL)
+    item_type = models.CharField(
+        max_length=16,
+        choices=(("ball", "Collectible card"), ("wicked_spell", "Wicked Spell")),
+        default="ball",
+    )
+    spell_effect = models.CharField(
+        max_length=32,
+        choices=(
+            ("double_stats", "Double the next caught card's stats"),
+            ("special_variant", "Apply a special variant to the next caught card"),
+        ),
+        blank=True,
+    )
+    spell_special = models.ForeignKey(
+        Special,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="merchant_spell_items",
+        help_text="Required for a special-variant spell; selects the guaranteed next-card background.",
+    )
+    stat_multiplier = models.PositiveSmallIntegerField(
+        default=2,
+        help_text="Stat multiplier for a double-stats spell. The default is 2×.",
+    )
+    ball = models.ForeignKey(Ball, null=True, blank=True, on_delete=models.CASCADE)
+    special = models.ForeignKey(
+        Special,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="merchant_card_items",
+        help_text="Optional special background for a collectible-card offer.",
+    )
 
     class Meta:
         ordering = ("id",)
@@ -93,7 +125,11 @@ class MerchantItem(models.Model):
 
     @property
     def label(self) -> str:
-        return self.display_name or self.ball.country
+        if self.display_name:
+            return self.display_name
+        if self.item_type == "wicked_spell":
+            return self.get_spell_effect_display() or "Wicked Spell"
+        return self.ball.country if self.ball else "Unknown collectible"
 
 
 class MerchantRotation(models.Model):

@@ -5,9 +5,7 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
     initial = True
 
-    dependencies = [
-        ("bd_models", "0014_alter_ball_options_alter_ballinstance_options_and_more"),
-    ]
+    dependencies = [("bd_models", "0014_alter_ball_options_alter_ballinstance_options_and_more")]
 
     operations = [
         migrations.CreateModel(
@@ -20,11 +18,15 @@ class Migration(migrations.Migration):
                 ("enabled", models.BooleanField(default=True, help_text="Disable to hide the merchant entirely.")),
                 (
                     "rotation_minutes",
-                    models.PositiveIntegerField(default=1440, help_text="How long a rotation lasts, in minutes. Default: 24h."),
+                    models.PositiveIntegerField(
+                        default=1440, help_text="How long a rotation lasts, in minutes. Default: 24h."
+                    ),
                 ),
                 (
                     "items_per_rotation",
-                    models.PositiveSmallIntegerField(default=3, help_text="How many offers are selected for each rotation."),
+                    models.PositiveSmallIntegerField(
+                        default=3, help_text="How many offers are selected for each rotation."
+                    ),
                 ),
                 (
                     "purchase_cooldown_seconds",
@@ -34,9 +36,7 @@ class Migration(migrations.Migration):
                 ),
                 ("last_rotation_at", models.DateTimeField(blank=True, null=True)),
             ],
-            options={
-                "verbose_name": "Merchant settings",
-            },
+            options={"verbose_name": "Merchant settings"},
         ),
         migrations.CreateModel(
             name="MerchantRotation",
@@ -45,18 +45,24 @@ class Migration(migrations.Migration):
                 ("starts_at", models.DateTimeField()),
                 ("ends_at", models.DateTimeField()),
             ],
-            options={
-                "ordering": ("-starts_at",),
-            },
+            options={"ordering": ("-starts_at",)},
         ),
         migrations.CreateModel(
             name="MerchantItem",
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
-                ("display_name", models.CharField(blank=True, help_text="Optional override name. Defaults to the ball name.", max_length=64)),
+                (
+                    "display_name",
+                    models.CharField(
+                        blank=True, help_text="Optional override name. Defaults to the ball name.", max_length=64
+                    ),
+                ),
                 ("description", models.CharField(blank=True, max_length=200)),
                 ("price", models.PositiveBigIntegerField(default=1000, help_text="Price charged to the player.")),
-                ("weight", models.PositiveIntegerField(default=1, help_text="Relative selection weight for rotations.")),
+                (
+                    "weight",
+                    models.PositiveIntegerField(default=1, help_text="Relative selection weight for rotations."),
+                ),
                 ("enabled", models.BooleanField(default=True)),
                 ("ball", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to="bd_models.ball")),
                 (
@@ -66,9 +72,7 @@ class Migration(migrations.Migration):
                     ),
                 ),
             ],
-            options={
-                "ordering": ("id",),
-            },
+            options={"ordering": ("id",)},
         ),
         migrations.CreateModel(
             name="MerchantRotationItem",
@@ -79,19 +83,21 @@ class Migration(migrations.Migration):
                 (
                     "item",
                     models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE, related_name="rotation_entries", to="merchant.merchantitem"
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="rotation_entries",
+                        to="merchant.merchantitem",
                     ),
                 ),
                 (
                     "rotation",
                     models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE, related_name="rotation_items", to="merchant.merchantrotation"
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="rotation_items",
+                        to="merchant.merchantrotation",
                     ),
                 ),
             ],
-            options={
-                "ordering": ("id",),
-            },
+            options={"ordering": ("id",)},
         ),
         migrations.CreateModel(
             name="MerchantPurchase",
@@ -115,9 +121,7 @@ class Migration(migrations.Migration):
                     ),
                 ),
             ],
-            options={
-                "ordering": ("-created_at",),
-            },
+            options={"ordering": ("-created_at",)},
         ),
         migrations.AddIndex(
             model_name="merchantpurchase",

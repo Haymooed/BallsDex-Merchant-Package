@@ -7,7 +7,7 @@ name = "ballsdex-merchant"
 version = "0.0.0"
 
 description = "A travelling merchant to sell balls."
-license = "MIT"
+license = { text = "MIT" }
 authors = [
     { name = "Haymooed" },
 ]
